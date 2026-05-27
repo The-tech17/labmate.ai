@@ -1,6 +1,6 @@
-# Libra - Academic AI Agent
+# Labmate.ai - Academic AI Agent
 
-Libra is a powerful web application designed to help students generate high-quality lab practicals. It uses a clean, modern UI with a "Magic" aesthetic and outputs beautifully formatted PDF documents.
+Labmate.ai is a powerful web application designed to help students generate high-quality lab practicals. It uses a clean, modern UI with a "Magic" aesthetic and outputs beautifully formatted PDF documents.
 
 ## Prerequisites
 - Python 3.9+ 
