@@ -978,11 +978,34 @@ function getAuthHeaders() {
 function showCreditStatus(credits) {
     currentCredits = Number(credits || 0);
     const display = document.getElementById('credit-display');
-    if (!display) return;
     const experimentsLeft = Math.floor(currentCredits / EXPERIMENT_CREDIT_COST);
-    display.innerHTML = `${currentCredits} Credits Remaining (${experimentsLeft} experiments)`;
-    display.classList.toggle('text-amber-300', currentCredits < EXPERIMENT_CREDIT_COST);
-    display.classList.toggle('text-emerald-300', currentCredits >= EXPERIMENT_CREDIT_COST);
+    const message = `${currentCredits} Credits Remaining (${experimentsLeft} experiments)`;
+    if (display) {
+        display.innerHTML = message;
+        display.classList.toggle('text-amber-300', currentCredits < EXPERIMENT_CREDIT_COST);
+        display.classList.toggle('text-emerald-300', currentCredits >= EXPERIMENT_CREDIT_COST);
+    }
+
+    const authDisplay = document.getElementById('auth-credit-display');
+    if (authDisplay) {
+        authDisplay.textContent = message;
+        authDisplay.classList.toggle('text-amber-300', currentCredits < EXPERIMENT_CREDIT_COST);
+        authDisplay.classList.toggle('text-emerald-300', currentCredits >= EXPERIMENT_CREDIT_COST);
+    }
+}
+
+function showCreditUnavailable(message = 'Credits unavailable') {
+    const displays = [
+        document.getElementById('credit-display'),
+        document.getElementById('auth-credit-display')
+    ].filter(Boolean);
+
+    displays.forEach(display => {
+        display.textContent = message;
+        display.classList.remove('text-emerald-300');
+        display.classList.add('text-amber-300');
+        display.title = message;
+    });
 }
 
 async function chargeForExperiment() {
@@ -1005,12 +1028,13 @@ async function chargeForExperiment() {
                 openBilling(data.message || 'You need more credits to generate another experiment.');
                 return false;
             }
-            throw new Error(data.error || data.message || 'Credit charge failed');
+            throw new Error(data.message || data.error || 'Credit charge failed');
         }
 
         showCreditStatus(data.credits);
         return true;
     } catch (err) {
+        showCreditUnavailable('Credits need setup');
         alert('Could not verify credits: ' + err.message);
         return false;
     }
@@ -1200,11 +1224,10 @@ async function fetchCredits() {
     try {
         const response = await fetch('/api/credits/account', { headers: getAuthHeaders() });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Unable to fetch credits');
+        if (!response.ok) throw new Error(data.message || data.error || 'Unable to fetch credits');
         showCreditStatus(data.credits);
     } catch (err) {
-        const display = document.getElementById('credit-display');
-        if (display) display.innerHTML = 'Credits unavailable';
+        showCreditUnavailable('Credits unavailable');
         console.error(err);
     }
 }
