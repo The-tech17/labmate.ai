@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 import os
 import io
 import json
+import html
 from groq import Groq
 from supabase import create_client, Client
 from functools import wraps
@@ -415,16 +416,127 @@ def export_word():
 <html>
 <head>
     <meta charset="utf-8">
-    <title>{title}</title>
+    <title>{html.escape(title)}</title>
     <style>
-        body {{ font-family: "Times New Roman", serif; font-size: 12pt; color: #111827; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th, td {{ border: 1px solid #64748b; padding: 6px; vertical-align: top; }}
-        img {{ max-width: 100%; height: auto; }}
-        pre {{ white-space: pre-wrap; font-family: Consolas, monospace; }}
+        @page {{ size: A4 portrait; margin: 25.4mm; }}
+        html, body {{
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            color: #000000;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
+            line-height: 1;
+        }}
+        body {{
+            mso-line-height-rule: exactly;
+        }}
+        #document-page, #result-content, #doc-header, #doc-footer,
+        .section-card, .section-title, .section-body {{
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            box-shadow: none;
+            background: transparent;
+            color: #000000;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
+            line-height: 1;
+        }}
+        #doc-header {{
+            margin-bottom: 10pt;
+            min-height: 0;
+        }}
+        #doc-footer {{
+            margin-top: 10pt;
+            padding-top: 4pt;
+        }}
+        #doc-header:empty, #doc-footer:empty {{
+            display: none;
+        }}
+        .section-card {{
+            margin: 0 0 6pt 0;
+            page-break-inside: auto;
+        }}
+        .section-title, .section-card h3, .section-inline-label, .inline-label {{
+            display: inline;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            color: #000000;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
+            font-weight: bold;
+            line-height: 1;
+            page-break-after: avoid;
+        }}
+        .section-body, .section-body p, #result-content p {{
+            margin: 0 0 3pt 0;
+            color: #000000;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
+            line-height: 1;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            margin: 0 0 3pt 0;
+            padding: 0;
+            border: 0;
+            color: #000000;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
+            font-weight: bold;
+            line-height: 1;
+        }}
+        ul, ol {{
+            margin: 2pt 0 3pt 18pt;
+            padding: 0;
+        }}
+        li {{
+            margin: 0 0 1pt 0;
+            line-height: 1;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            border-spacing: 0;
+            margin: 0 0 4pt 0;
+        }}
+        th, td {{
+            border: 1px solid #64748b;
+            padding: 4pt 5pt;
+            vertical-align: top;
+            text-align: left;
+            font-weight: normal;
+        }}
+        th {{
+            font-weight: bold;
+        }}
+        img, svg {{
+            max-width: 100%;
+            height: auto;
+        }}
+        pre, code {{
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 10pt;
+            line-height: 1;
+            background: transparent;
+            border: 0;
+            padding: 0;
+        }}
+        .print\\:hidden, .magic-btn, .magic-btn-visual, .magic-run-btn,
+        button, figcaption, .absolute, .opacity-0 {{
+            display: none !important;
+        }}
+        [contenteditable="false"] {{
+            display: none;
+        }}
     </style>
 </head>
-<body>{document_html}</body>
+<body><div id="document-page">{document_html}</div></body>
 </html>"""
         buffer = io.BytesIO(word_html.encode("utf-8"))
         return send_file(
