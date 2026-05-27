@@ -1,0 +1,6 @@
+Flask==3.0.0
+groq>=1.1.2
+fpdf2>=2.8.1
+python-dotenv==1.0.1
+Flask-CORS==4.0.0
+supabase>=2.3.0

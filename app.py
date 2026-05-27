@@ -1,0 +1,515 @@
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
+import os
+import io
+import json
+from groq import Groq
+from supabase import create_client, Client
+from functools import wraps
+from dotenv import load_dotenv
+from flask_cors import CORS
+import ast
+import subprocess
+import uuid
+import shutil
+import re
+
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
+
+def clear_dead_local_proxy():
+    proxy_vars = (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+        "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY",
+    )
+    for name in proxy_vars:
+        value = os.environ.get(name, "")
+        if "127.0.0.1:9" in value or "localhost:9" in value:
+            os.environ.pop(name, None)
+
+clear_dead_local_proxy()
+
+# --- FIX 1: Explicit Static Folder for Generated Outputs ---
+app = Flask(__name__, static_url_path='', static_folder='static')
+# Standardizing CORS to allow the frontend to talk to these specific routes
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+OUTPUTS_DIR = os.path.join(app.root_path, 'static', 'outputs')
+os.makedirs('static/css', exist_ok=True)
+os.makedirs('static/js', exist_ok=True)
+os.makedirs('templates', exist_ok=True)
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
+
+api_key = os.environ.get("GROQ_API_KEY", "").strip()
+client = Groq(api_key=api_key) if api_key else None
+MODEL_ID = 'llama-3.3-70b-versatile' 
+FREE_CREDIT_ALLOWANCE = 400
+EXPERIMENT_CREDIT_COST = 20
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
+
+PAYMENT_LINK_URL = (
+    os.environ.get("RAZORPAY_PAYMENT_LINK_URL", "").strip()
+    or os.environ.get("STRIPE_PAYMENT_LINK_URL", "").strip()
+    or os.environ.get("LIBRA_PAYMENT_LINK_URL", "").strip()
+)
+
+def parse_model_json(raw_text, default_key="content"):
+    if not raw_text:
+        return {default_key: ""}
+
+    raw_text = raw_text.strip()
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        pass
+
+    fenced_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw_text, re.DOTALL)
+    if fenced_match:
+        try:
+            return json.loads(fenced_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    object_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+    if object_match:
+        try:
+            return json.loads(object_match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    return {default_key: raw_text}
+
+def is_code_section(section_title):
+    title = (section_title or "").strip().lower()
+    return "code" in title or "program" in title or "implementation" in title
+
+def is_output_section(section_title):
+    title = (section_title or "").strip().lower()
+    return "result" in title or "output" in title or "observation" in title
+
+def strip_wrapping_fences(text):
+    if not text:
+        return ""
+
+    value = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", value)
+    return match.group(1).strip() if match else value
+
+def clean_generated_section_content(content, section_title, preserve_code=False):
+    if content is None:
+        return ""
+
+    text = str(content).strip()
+    if not text:
+        return ""
+
+    if not preserve_code:
+        text = strip_wrapping_fences(text)
+
+    section = re.escape((section_title or "").strip())
+    if section:
+        patterns = [
+            rf"^\s*#{1,6}\s*{section}\s*:?\s*",
+            rf"^\s*\*\*{section}\s*:?\*\*\s*",
+            rf"^\s*<h[1-6][^>]*>\s*{section}\s*:?\s*</h[1-6]>\s*",
+            rf"^\s*<strong[^>]*>\s*{section}\s*:?\s*</strong>\s*",
+            rf"^\s*{section}\s*:\s*",
+        ]
+        for pattern in patterns:
+            text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+    return text.strip()
+
+def get_section_specific_guidance(section_title, subject_type, is_visual):
+    title = (section_title or "").strip().lower()
+
+    if is_visual:
+        if subject_type == "Coding":
+            return (
+                "This is a coding visual/code section. Return only the code needed for this section. "
+                "Do not include introductions, explanations, labels, JSON wrappers, or markdown outside the code block."
+            )
+        return (
+            "This is a non-coding visual section. Return only the requested diagram/visual content for this section. "
+            "Do not include introductions, explanations, or unrelated practical sections."
+        )
+
+    if "aim" in title or "objective" in title:
+        return (
+            "SECTION TYPE: AIM. Return exactly one concise aim/objective statement for this experiment. "
+            "Do not include steps, theory, code, output, datasets, implementation details, or extra headings."
+        )
+    if "theory" in title or "concept" in title:
+        return (
+            "SECTION TYPE: THEORY. Explain only the core concepts, definitions, formulas, and academic background needed for this experiment. "
+            "Do not include aim, procedure, implementation steps, source code, output, result, or conclusion."
+        )
+    if "algorithm" in title or "procedure" in title or "method" in title:
+        return (
+            "SECTION TYPE: PROCEDURE/ALGORITHM. Return only the stepwise method or algorithm. "
+            "Use a compact numbered list. Do not include theory paragraphs, code, output, result, or conclusion."
+        )
+    if "code" in title or "program" in title or "implementation" in title:
+        return (
+            "SECTION TYPE: CODE. Return only the final runnable source code for the experiment in one fenced code block. "
+            "Do not include aim, theory, explanation, algorithm prose, output, result, JSON wrappers, or repeated section labels. "
+            "Ensure the generated JSON is strictly valid. Do not use triple quotes inside the JSON object."
+        )
+    if "result" in title or "output" in title or "observation" in title:
+        if subject_type == "Coding":
+            return (
+                "SECTION TYPE: CODE OUTPUT. Return strictly only the exact expected console output or generated-result text for the program. "
+                "Do not explain the output. Do not include aim, theory, algorithm, source code, conclusion, labels, or markdown headings."
+            )
+        return (
+            "SECTION TYPE: OUTPUT/RESULT. Return only the expected output, observations, or result statement for this experiment. "
+            "Do not include aim, theory, algorithm, source code, conclusion, labels, or markdown headings."
+        )
+    if "conclusion" in title:
+        return (
+            "SECTION TYPE: CONCLUSION. Return only a short conclusion based on the experiment. "
+            "Do not include theory, procedure, algorithm, code, output tables, or new explanatory sections."
+        )
+
+    return (
+        f"This section must contain only content appropriate for '{section_title}'. "
+        "Do not drift into other practical sections or repeat a generic introduction."
+    )
+
+# Backend Auth JWT Verification Decorator
+def require_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not supabase:
+            return jsonify({"error": "Authentication is not configured. Add SUPABASE_URL and SUPABASE_KEY."}), 503
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized"}), 401
+        token = auth_header.split(" ")[1]
+        try:
+            user = supabase.auth.get_user(token)
+            if not user:
+                raise Exception("Invalid Session")
+            request.user = user
+        except Exception as e:
+            return jsonify({"error": "Authentication Failed. " + str(e)}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+def get_auth_user_id():
+    return request.user.user.id
+
+def ensure_credit_account(user_id):
+    response = supabase.table("user_credits").select("credits").eq("user_id", user_id).execute()
+    if response.data:
+        credits = int(response.data[0].get("credits", 0) or 0)
+        return credits, False
+
+    supabase.table("user_credits").insert({
+        "user_id": user_id,
+        "credits": FREE_CREDIT_ALLOWANCE
+    }).execute()
+    return FREE_CREDIT_ALLOWANCE, True
+
+def get_current_credits(user_id):
+    credits, _created = ensure_credit_account(user_id)
+    return credits
+
+@app.route('/')
+def index():
+    # Inject secure config to the frontend JS engine
+    return render_template('index.html', supabase_url=SUPABASE_URL, supabase_key=SUPABASE_KEY)
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+# --- FIX 2: Added a helper to serve generated images without 404s ---
+@app.route('/outputs/<path:path>')
+def send_report_assets(path):
+    return send_from_directory(OUTPUTS_DIR, path)
+
+@app.route('/api/outline', methods=['POST'])
+@require_auth
+def generate_outline():
+    # ... (Keep your current logic, it is structurally sound)
+    try:
+        if not client:
+            return jsonify({"error": "Groq API key is missing from the .env file. Please add GROQ_API_KEY."}), 500
+            
+        data = request.json
+        prompt_text = data.get('prompt', '')
+        response = client.chat.completions.create(
+            model=MODEL_ID,
+            messages=[
+                {"role": "system", "content": "You are Labmate.ai. Generate a professional lab practical outline. You must output a strictly valid JSON object with a single key 'outline' containing an array of strings representing the section titles."},
+                {"role": "user", "content": f"Generate a professional lab practical outline for: {prompt_text}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        content = json.loads(response.choices[0].message.content)
+        return jsonify(content.get('outline', []))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/credits/account', methods=['GET'])
+@require_auth
+def credit_account():
+    try:
+        user_id = get_auth_user_id()
+        credits, created = ensure_credit_account(user_id)
+        return jsonify({
+            "credits": credits,
+            "created": created,
+            "free_allowance": FREE_CREDIT_ALLOWANCE,
+            "experiment_cost": EXPERIMENT_CREDIT_COST,
+            "free_experiments": FREE_CREDIT_ALLOWANCE // EXPERIMENT_CREDIT_COST
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/credits/consume_experiment', methods=['POST'])
+@require_auth
+def consume_experiment_credits():
+    try:
+        user_id = get_auth_user_id()
+        current_credits = get_current_credits(user_id)
+        if current_credits < EXPERIMENT_CREDIT_COST:
+            return jsonify({
+                "error": "OUT_OF_CREDITS",
+                "message": "You need more credits to generate another experiment.",
+                "credits": current_credits,
+                "required": EXPERIMENT_CREDIT_COST
+            }), 402
+
+        remaining = current_credits - EXPERIMENT_CREDIT_COST
+        supabase.table("user_credits").update({"credits": remaining}).eq("user_id", user_id).execute()
+        return jsonify({
+            "credits": remaining,
+            "charged": EXPERIMENT_CREDIT_COST
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/billing/options', methods=['GET'])
+@require_auth
+def billing_options():
+    return jsonify({
+        "methods": ["Cards", "UPI", "Net banking", "Wallets"],
+        "configured": bool(PAYMENT_LINK_URL),
+        "checkout_url": PAYMENT_LINK_URL if PAYMENT_LINK_URL else None,
+        "message": (
+            "Billing is ready to open your configured payment link."
+            if PAYMENT_LINK_URL
+            else "Add RAZORPAY_PAYMENT_LINK_URL, STRIPE_PAYMENT_LINK_URL, or LIBRA_PAYMENT_LINK_URL to enable live payments."
+        )
+    })
+
+@app.route('/api/billing/checkout', methods=['POST'])
+@require_auth
+def billing_checkout():
+    if not PAYMENT_LINK_URL:
+        return jsonify({
+            "error": "BILLING_NOT_CONFIGURED",
+            "message": "Create a Razorpay/Stripe payment link and add it to .env as RAZORPAY_PAYMENT_LINK_URL or STRIPE_PAYMENT_LINK_URL."
+        }), 501
+    return jsonify({"checkout_url": PAYMENT_LINK_URL})
+
+@app.route('/api/export/word', methods=['POST'])
+@require_auth
+def export_word():
+    try:
+        data = request.json or {}
+        title = re.sub(r"[^A-Za-z0-9_-]+", "_", data.get("title", "Labmate.ai_experiment")).strip("_") or "Labmate.ai_experiment"
+        document_html = data.get("html", "")
+        if not document_html.strip():
+            return jsonify({"error": "No document content was provided."}), 400
+
+        word_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{title}</title>
+    <style>
+        body {{ font-family: "Times New Roman", serif; font-size: 12pt; color: #111827; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #64748b; padding: 6px; vertical-align: top; }}
+        img {{ max-width: 100%; height: auto; }}
+        pre {{ white-space: pre-wrap; font-family: Consolas, monospace; }}
+    </style>
+</head>
+<body>{document_html}</body>
+</html>"""
+        buffer = io.BytesIO(word_html.encode("utf-8"))
+        return send_file(
+            buffer,
+            mimetype="application/msword",
+            as_attachment=True,
+            download_name=f"{title}.doc"
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/section', methods=['POST'])
+@require_auth
+def generate_section():
+    try:
+        if not client:
+            return jsonify({"error": "Groq API key is missing from the .env file. Please add GROQ_API_KEY."}), 500
+            
+        user_id = get_auth_user_id()
+        ensure_credit_account(user_id)
+
+        data = request.json
+        topic = (data.get('topic', '') or '').strip()
+        section_title = (data.get('section', '') or '').strip()
+        is_visual = data.get('is_visual', False)
+        subject_type = (data.get('type', 'Non-Coding') or 'Non-Coding').strip()
+        if not section_title:
+            return jsonify({"error": "Section title is required"}), 400
+
+        system_instructions = (
+            f"You are Labmate.ai, an expert academic writer. "
+            f"Generate exactly one lab-practical section, not a full practical. "
+            f"Topic: '{topic}'. Subject type: '{subject_type}'. Target section: '{section_title}'. "
+            f"Hard boundary: every sentence must belong only to the target section. "
+            f"Do not borrow content from Aim, Theory, Procedure, Code, Output, Result, or Conclusion unless that is the target section. "
+            f"Do not repeat the section title as a heading or prefix (e.g., NEVER start with '{section_title}:'). Start directly with the core text. "
+            f"Output clean markdown inside a strictly valid JSON object with one key, 'content'. "
+            f"IMPORTANT: The 'content' value must be a standard JSON string enclosed in double quotes (\"). Do not use Python-style triple quotes (\"\"\") inside the JSON. Escape all newlines properly (\\n)."
+        )
+        system_instructions += " " + get_section_specific_guidance(section_title, subject_type, is_visual)
+        if is_visual:
+            if subject_type == 'Coding':
+                system_instructions += (
+                    " Output ONLY a fenced ```python``` code block inside the JSON string. "
+                    "The code must generate the requested visual/output and save it with plt.savefig('plot.png'). "
+                    "Do not include prose, headings, or explanations."
+                )
+            else:
+                system_instructions += (
+                    " Output ONLY one directly renderable diagram for a non-coding practical. "
+                    "For UML, software design, usability design, DFD, flowchart, ER, use-case, class, sequence, state, component, deployment, and activity diagrams, return exactly one fenced ```mermaid``` block. "
+                    "Use valid Mermaid syntax and short, correctly spelled node labels. "
+                    "If Mermaid cannot represent the requested diagram, output clean inline SVG only. "
+                    "Never output explanations, Python, imports, programming code, markdown headings, or a 'Code' section for non-coding visuals."
+                )
+        elif subject_type == 'Non-Coding':
+            system_instructions += " This is a non-coding practical, so generally avoid source code unless the target section explicitly requires it (e.g., a 'Code' or 'Implementation' section)."
+
+        raw_markdown_mode = is_visual or (subject_type == 'Coding' and is_code_section(section_title))
+        if raw_markdown_mode:
+            raw_system_instructions = (
+                system_instructions
+                .replace("Output clean markdown inside a strictly valid JSON object with one key, 'content'. ", "")
+                .replace("IMPORTANT: The 'content' value must be a standard JSON string enclosed in double quotes (\"). Do not use Python-style triple quotes (\"\"\") inside the JSON. Escape all newlines properly (\\n).", "")
+                .replace("Ensure the generated JSON is strictly valid. Do not use triple quotes inside the JSON object.", "")
+                .replace(" inside the JSON string", "")
+            )
+            response = client.chat.completions.create(
+                model=MODEL_ID,
+                messages=[
+                    {"role": "system", "content": raw_system_instructions},
+                    {"role": "user", "content": (
+                        f"Write only the '{section_title}' section for this practical topic: '{topic}'. "
+                        "Return only the final markdown content. Do not wrap it in JSON."
+                    )}
+                ],
+                temperature=0.35
+            )
+            content = {"content": response.choices[0].message.content}
+        else:
+            response = client.chat.completions.create(
+                model=MODEL_ID,
+                messages=[
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": (
+                        f"Write only the '{section_title}' section for this practical topic: '{topic}'. "
+                        f"Return JSON only, with the shape {{\"content\": \"...\"}}."
+                    )}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.4
+            )
+            content = parse_model_json(response.choices[0].message.content, default_key="content")
+            if "content" not in content:
+                content = {"content": content.get("text", "")}
+
+        content["content"] = clean_generated_section_content(
+            content.get("content", ""),
+            section_title,
+            preserve_code=raw_markdown_mode
+        )
+        
+        return jsonify(content)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/run_code', methods=['POST'])
+@require_auth
+def run_code():
+    try:
+        data = request.json
+        code_string = data.get('code', '')
+
+        # Security Check
+        try:
+            parsed = ast.parse(code_string)
+            for node in ast.walk(parsed):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    # Allow matplotlib, numpy, pandas, sklearn. Block the rest for safety.
+                    allowed = ['matplotlib', 'numpy', 'pandas', 'sklearn', 'seaborn', 'plt', 'math']
+                    module = node.names[0].name if isinstance(node, ast.Import) else node.module
+                    if module.split('.')[0] not in allowed:
+                         return jsonify({"error": f"Security Violation: '{module}' is not allowed."}), 403
+        except SyntaxError as e:
+            return jsonify({"error": f"Syntax Error: {str(e)}"}), 400
+
+        sandbox_id = str(uuid.uuid4())
+        sandbox_dir = os.path.join(OUTPUTS_DIR, sandbox_id)
+        os.makedirs(sandbox_dir, exist_ok=True)
+        
+        script_path = os.path.join(sandbox_dir, 'main.py')
+        # FIX 3: Ensure matplotlib doesn't try to open a GUI window (which crashes servers)
+        clean_code = "import matplotlib\nmatplotlib.use('Agg')\n" + code_string
+        
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(clean_code)
+            
+        # FIX 4: Use 'python' for Windows compatibility in venv
+        result = subprocess.run(
+            ['python', 'main.py'],
+            cwd=sandbox_dir,
+            capture_output=True,
+            text=True,
+            timeout=15 
+        )
+        
+        generated_images = []
+        for file in os.listdir(sandbox_dir):
+            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                # Adjusted URL to match the helper route
+                generated_images.append(f"/outputs/{sandbox_id}/{file}")
+                
+        return jsonify({
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "images": generated_images
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout"}), 408
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000, use_reloader=False)
