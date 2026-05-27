@@ -12,6 +12,9 @@ import subprocess
 import uuid
 import shutil
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path)
@@ -195,6 +198,7 @@ def require_auth(f):
             if not user:
                 raise Exception("Invalid Session")
             request.user = user
+            request.access_token = token
         except Exception as e:
             return jsonify({"error": "Authentication Failed. " + str(e)}), 401
         return f(*args, **kwargs)
@@ -203,16 +207,79 @@ def require_auth(f):
 def get_auth_user_id():
     return request.user.user.id
 
+def get_auth_access_token():
+    return getattr(request, "access_token", None)
+
+def supabase_rest_request(method, path, token, body=None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase is not configured.")
+    if not token:
+        raise RuntimeError("Missing user session token.")
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{path}"
+    payload = None
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        headers["Prefer"] = "return=representation"
+
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else []
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            details = json.loads(raw)
+        except json.JSONDecodeError:
+            details = {"message": raw or exc.reason, "code": exc.code}
+        raise RuntimeError(details) from exc
+
+def credit_setup_error(error):
+    text = str(error).lower()
+    if "row-level security" in text or "42501" in text:
+        return (
+            "Credits table is missing the insert policy. Run the updated "
+            "user_credits SQL setup in Supabase, then reload Labmate.ai."
+        )
+    return None
+
 def ensure_credit_account(user_id):
-    response = supabase.table("user_credits").select("credits").eq("user_id", user_id).execute()
-    if response.data:
-        credits = int(response.data[0].get("credits", 0) or 0)
+    token = get_auth_access_token()
+    user_filter = urllib.parse.quote(str(user_id), safe="")
+    rows = supabase_rest_request(
+        "GET",
+        f"user_credits?select=credits&user_id=eq.{user_filter}",
+        token
+    )
+    if rows:
+        credits = int(rows[0].get("credits", 0) or 0)
         return credits, False
 
-    supabase.table("user_credits").insert({
-        "user_id": user_id,
-        "credits": FREE_CREDIT_ALLOWANCE
-    }).execute()
+    try:
+        supabase_rest_request(
+            "POST",
+            "user_credits",
+            token,
+            {"user_id": user_id, "credits": FREE_CREDIT_ALLOWANCE}
+        )
+    except RuntimeError as e:
+        if "23505" in str(e):
+            rows = supabase_rest_request(
+                "GET",
+                f"user_credits?select=credits&user_id=eq.{user_filter}",
+                token
+            )
+            if rows:
+                return int(rows[0].get("credits", 0) or 0), False
+        raise
     return FREE_CREDIT_ALLOWANCE, True
 
 def get_current_credits(user_id):
@@ -273,6 +340,9 @@ def credit_account():
             "free_experiments": FREE_CREDIT_ALLOWANCE // EXPERIMENT_CREDIT_COST
         })
     except Exception as e:
+        setup_message = credit_setup_error(e)
+        if setup_message:
+            return jsonify({"error": "CREDITS_SETUP_REQUIRED", "message": setup_message}), 500
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/credits/consume_experiment', methods=['POST'])
@@ -290,12 +360,21 @@ def consume_experiment_credits():
             }), 402
 
         remaining = current_credits - EXPERIMENT_CREDIT_COST
-        supabase.table("user_credits").update({"credits": remaining}).eq("user_id", user_id).execute()
+        user_filter = urllib.parse.quote(str(user_id), safe="")
+        supabase_rest_request(
+            "PATCH",
+            f"user_credits?user_id=eq.{user_filter}",
+            get_auth_access_token(),
+            {"credits": remaining}
+        )
         return jsonify({
             "credits": remaining,
             "charged": EXPERIMENT_CREDIT_COST
         })
     except Exception as e:
+        setup_message = credit_setup_error(e)
+        if setup_message:
+            return jsonify({"error": "CREDITS_SETUP_REQUIRED", "message": setup_message}), 500
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/billing/options', methods=['GET'])
