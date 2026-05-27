@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labmate.ai - Your AI Lab Partner for Perfect Experiments</title>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.4.0/dist/mermaid.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/print-master.css?v=2" media="print">
+    
+    <!-- Supabase Auth -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        window.SUPABASE_URL = "{{ supabase_url }}";
+        window.SUPABASE_KEY = "{{ supabase_key }}";
+    </script>
+</head>
+
+<body class="bg-slate-900 text-white font-inter min-h-screen relative overflow-x-hidden">
+    <!-- Starry Background -->
+    <div id="stars"></div>
+    <div id="stars2"></div>
+    <div id="stars3"></div>
+
+    <!-- Gamma-Style Floating Toolbar -->
+    <div id="floating-toolbar"
+        class="hidden absolute z-50 bg-slate-800/90 backdrop-blur shadow-2xl rounded-xl border border-purple-500/50 flex items-center gap-1 p-2 transition-all duration-150 transform scale-95 opacity-0 print:hidden origin-bottom">
+        <button onmousedown="event.preventDefault(); window.formatDoc('bold')"
+            class="w-8 h-8 rounded hover:bg-slate-700 text-white font-bold flex items-center justify-center transition-colors"
+            title="Bold">B</button>
+        <button onmousedown="event.preventDefault(); window.formatDoc('italic')"
+            class="w-8 h-8 rounded hover:bg-slate-700 text-white italic flex items-center justify-center transition-colors"
+            title="Italic">I</button>
+        <button onmousedown="event.preventDefault(); window.formatDoc('underline')"
+            class="w-8 h-8 rounded hover:bg-slate-700 text-white underline flex items-center justify-center transition-colors"
+            title="Underline">U</button>
+        <div class="h-5 w-px bg-slate-600 mx-1"></div>
+        <select onmousedown="event.preventDefault()"
+            onchange="window.formatDoc('formatBlock', this.value); this.selectedIndex=0"
+            class="bg-slate-900 rounded-md px-2 py-1 text-xs text-white border border-purple-500/30 focus:outline-none hover:bg-slate-700 cursor-pointer">
+            <option value="" disabled selected>Style</option>
+            <option value="H3">Heading 3 (Title)</option>
+            <option value="H4">Heading 4</option>
+            <option value="P">Paragraph</option>
+        </select>
+        <div class="h-5 w-px bg-slate-600 mx-1"></div>
+        <input type="color" onchange="window.formatDoc('foreColor', this.value)" title="Text Color" value="#000000"
+            class="w-6 h-6 p-0 border-0 rounded cursor-pointer bg-transparent">
+        <input type="color" onchange="window.formatDoc('hiliteColor', this.value)" title="Highlight Color"
+            value="#ffff00" class="w-6 h-6 p-0 border-0 rounded cursor-pointer bg-transparent">
+    </div>
+
+    <!-- Authentication Portal -->
+    <div id="auth-container" class="relative z-20 flex items-center justify-center min-h-screen px-4 animate-fade-in">
+        <div class="glass-panel p-8 sm:p-10 rounded-3xl shadow-2xl border border-purple-500/20 backdrop-blur-md max-w-md w-full">
+            <div class="text-center mb-8">
+                <h1 class="text-5xl font-outfit font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 mb-2">Labmate.ai</h1>
+                <p class="text-purple-300">Access your academic workspace</p>
+            </div>
+            
+            <form id="auth-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-purple-300 mb-1">Email</label>
+                    <input type="email" id="auth-email" required class="w-full bg-slate-800/50 border border-purple-500/30 rounded-xl p-3 text-white focus:outline-none focus:border-purple-400 transition-all font-medium">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-purple-300 mb-1">Password</label>
+                    <input type="password" id="auth-password" required class="w-full bg-slate-800/50 border border-purple-500/30 rounded-xl p-3 text-white focus:outline-none focus:border-purple-400 transition-all font-medium">
+                </div>
+                
+                <div id="auth-error" class="hidden text-red-400 text-sm p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-center font-medium animate-pulse"></div>
+                
+                <div class="pt-4 space-y-3">
+                    <button type="button" id="google-login-btn" class="w-full bg-white text-slate-900 px-6 py-3 rounded-xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg flex justify-center items-center gap-3">
+                        <span class="text-lg font-bold">G</span>
+                        <span>Continue with Google</span>
+                    </button>
+                    <button type="submit" id="login-btn" class="w-full bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-3 rounded-xl font-bold text-white transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg flex justify-center items-center gap-2">
+                        <span>Sign In</span>
+                    </button>
+                    <button type="button" id="signup-btn" onclick="handleSignup()" class="w-full bg-slate-800/50 border border-purple-500/30 px-6 py-3 rounded-xl font-bold text-purple-300 hover:text-white transition-all hover:bg-purple-900/40">
+                        Create Dedicated Account
+                    </button>
+                </div>
+            </form>
+            <div class="mt-6 text-center text-xs text-slate-500">
+                New accounts receive 400 credits. Each experiment uses 20 credits.
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Workspace (Hidden by Default) -->
+    <div id="app-container" class="relative z-10 w-full max-w-4xl mx-auto px-6 py-12 print:py-0 print:px-0 hidden">
+        <header class="text-center mb-12 print:hidden relative">
+            <button onclick="handleLogout()" class="absolute right-0 top-0 text-sm border border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all">Sign Out</button>
+            <h1
+                class="text-6xl font-outfit font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 mb-4 animate-gradient">
+                Labmate.ai
+            </h1>
+            <p class="text-xl text-purple-200 font-light mb-2">Freeing students from academic stress with magical lab
+                practicals.</p>
+            <div class="inline-flex items-center gap-2 bg-slate-800/80 px-4 py-1.5 rounded-full border border-purple-500/30">
+                <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+                <span id="credit-display" class="text-sm font-mono text-emerald-300 font-bold">Checking credits...</span>
+            </div>
+            <button type="button" onclick="openBilling()" class="ml-2 inline-flex items-center gap-2 bg-slate-800/80 px-4 py-1.5 rounded-full border border-pink-500/30 text-sm text-pink-200 hover:bg-pink-900/30 transition-all">
+                Buy credits
+            </button>
+        </header>
+
+        <main class="glass-panel p-8 print:p-0 print:bg-transparent print:border-none print:shadow-none rounded-3xl shadow-2xl border border-purple-500/20 backdrop-blur-md">
+
+            <!-- STEP 1: Outline Generator -->
+            <div id="step-1" class="transition-all">
+                <form id="generate-form" class="space-y-6">
+                    <div>
+                        <label for="prompt" class="block text-sm font-medium text-purple-300 mb-2">What practical do you
+                            need?</label>
+                        <textarea id="prompt" rows="4"
+                            class="w-full bg-slate-800/50 border border-purple-500/30 rounded-xl p-4 text-white placeholder-purple-400/50 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 transition-all resize-none"
+                            placeholder="e.g. Generate a physics lab report on simple pendulum..."></textarea>
+                    </div>
+
+                    <div>
+                        <label for="format_type" class="block text-sm font-medium text-purple-300 mb-2">Subject
+                            Type</label>
+                        <select id="format_type"
+                            class="w-full bg-slate-800/50 border border-purple-500/30 rounded-xl p-4 text-white focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 transition-all appearance-none cursor-pointer">
+                            <option value="Non-Coding">Non-Coding (Procedure, Equations)</option>
+                            <option value="Coding">Coding (Code, Output)</option>
+                        </select>
+                    </div>
+
+                    <div class="pt-4">
+                        <button type="submit" id="generate-btn"
+                            class="w-full relative group overflow-hidden rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-8 py-4 font-outfit font-bold text-lg text-white transition-all hover:scale-[1.02] hover:shadow-[0_0_40px_rgba(168,85,247,0.4)] active:scale-[0.98]">
+                            <span id="generate-btn-text" class="relative z-10 flex items-center justify-center gap-2">
+                                <svg class="w-6 h-6 spark-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                </svg>
+                                Generate Outline
+                            </span>
+                            <div
+                                class="absolute inset-0 bg-gradient-to-r from-pink-600 to-purple-600 opacity-0 transition-opacity group-hover:opacity-100">
+                            </div>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="loading" class="hidden mt-12 text-center">
+                <div class="inline-block relative w-20 h-20">
+                    <div class="absolute top-0 left-0 w-full h-full border-4 border-purple-500/20 rounded-full"></div>
+                    <div
+                        class="absolute top-0 left-0 w-full h-full border-4 border-purple-400 rounded-full border-t-transparent animate-spin">
+                    </div>
+                </div>
+                <p class="mt-4 text-purple-300 font-outfit animate-pulse">Labmate.ai is weaving your practical...</p>
+            </div>
+
+            <!-- STEP 2: Outline Review -->
+            <div id="step-2" class="hidden transition-all animate-fade-in mt-8 border-t border-purple-500/20 pt-8">
+                <h2 class="text-2xl font-outfit font-bold text-purple-300 mb-2">Phase 2: Review Outline</h2>
+                <p class="text-slate-400 text-sm mb-6">Edit, remove, or add sections before creating your Canvas.</p>
+
+                <div id="outline-list" class="space-y-3 mb-6">
+                    <!-- Dynamic Outline Items Injected Here -->
+                </div>
+
+                <div class="flex gap-4">
+                    <button type="button" onclick="addOutlineItem()"
+                        class="px-6 py-3 rounded-xl border border-purple-500/50 text-purple-300 font-medium hover:bg-purple-900/30 transition-all flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4">
+                            </path>
+                        </svg>
+                        Add Section
+                    </button>
+                    <button type="button" onclick="createCanvas()"
+                        class="flex-1 py-3 rounded-xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold hover:shadow-[0_0_30px_rgba(232,121,249,0.3)] transition-all flex justify-center items-center gap-2">
+                        <span>🚀 Initialize Canvas</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="result-container" class="hidden mt-12 print:mt-0 space-y-4 print:space-y-0 animate-fade-in">
+                <!-- Editor Toolbar -->
+                <div id="editor-toolbar"
+                    class="flex flex-col gap-3 mb-2 bg-slate-800/80 p-4 rounded-xl border border-purple-500/30 backdrop-blur shadow-lg w-full print:hidden">
+                    <!-- Row 1: Document Settings -->
+                    <div class="flex flex-wrap items-center gap-4 pb-3 border-b border-purple-500/20 text-sm">
+                        <select id="font-family"
+                            class="bg-slate-900 rounded-md px-3 py-1.5 text-white border border-purple-500/50 focus:outline-none">
+                            <option value="'Times New Roman', serif" selected>Times New Roman</option>
+                            <option value="'Inter', sans-serif">Inter</option>
+                            <option value="'Outfit', sans-serif">Outfit</option>
+                            <option value="'Arial', sans-serif">Arial</option>
+                            <option value="'Georgia', serif">Georgia</option>
+                            <option value="'Courier New', monospace">Courier New</option>
+                        </select>
+
+                        <div class="flex items-center gap-2">
+                            <label class="text-purple-300 font-medium ml-2">Space:</label>
+                            <select id="line-spacing"
+                                class="bg-slate-900 rounded-md px-2 py-1.5 text-white border border-purple-500/50 focus:outline-none">
+                                <option value="1.0" selected>Single</option>
+                                <option value="1.15">1.15</option>
+                                <option value="1.5">1.5</option>
+                                <option value="2.0">Double</option>
+                            </select>
+                        </div>
+
+                        <select id="theme-selector"
+                            class="bg-slate-900 rounded-md px-3 py-1.5 text-white border border-purple-500/50 focus:outline-none">
+                            <option value="dark">Dark (Magic)</option>
+                            <option value="light">Light (Print)</option>
+                            <option value="sepia">Sepia (Reading)</option>
+                        </select>
+
+                        <div class="flex items-center gap-2 text-purple-300 font-medium">
+                            Size: <span id="size-val" class="w-8">12pt</span>
+                            <input type="range" id="font-size" min="10" max="20" value="12"
+                                class="w-24 accent-purple-500">
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Rich Text Editor Controls -->
+                    <div class="flex flex-wrap items-center gap-2 text-slate-300 text-sm font-medium">
+                        <!-- Formatting -->
+                        <select id="format-block"
+                            class="bg-slate-900 rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none"
+                            onchange="formatDoc('formatBlock', this.value); this.selectedIndex=0;">
+                            <option value="">Style...</option>
+                            <option value="H1">Heading 1</option>
+                            <option value="H2">Heading 2</option>
+                            <option value="H3">Heading 3</option>
+                            <option value="P">Paragraph</option>
+                        </select>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- BIU -->
+                        <button type="button" onclick="formatDoc('bold')"
+                            class="p-2 hover:bg-slate-700 rounded transition font-bold" title="Bold">B</button>
+                        <button type="button" onclick="formatDoc('italic')"
+                            class="p-2 hover:bg-slate-700 rounded transition italic" title="Italic">I</button>
+                        <button type="button" onclick="formatDoc('underline')"
+                            class="p-2 hover:bg-slate-700 rounded transition underline" title="Underline">U</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Color -->
+                        <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-md border border-slate-600"
+                            title="Text Color">
+                            <span class="pl-1 text-xs">Text</span>
+                            <input type="color" oninput="formatDoc('foreColor', this.value)"
+                                class="w-6 h-6 p-0 border-0 bg-transparent cursor-pointer">
+                        </div>
+                        <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-md border border-slate-600"
+                            title="Highlight Color">
+                            <span class="pl-1 text-xs">Highlight</span>
+                            <input type="color" oninput="formatDoc('hiliteColor', this.value)"
+                                class="w-6 h-6 p-0 border-0 bg-transparent cursor-pointer">
+                        </div>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Alignment -->
+                        <button type="button" onclick="formatDoc('justifyLeft')"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Align Left">Left</button>
+                        <button type="button" onclick="formatDoc('justifyCenter')"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Align Center">Center</button>
+                        <button type="button" onclick="formatDoc('justifyRight')"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Align Right">Right</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Indent -->
+                        <button type="button" onclick="formatDoc('outdent')"
+                            class="p-2 hover:bg-slate-700 rounded transition font-bold"
+                            title="Decrease Indent">⇥-</button>
+                        <button type="button" onclick="formatDoc('indent')"
+                            class="p-2 hover:bg-slate-700 rounded transition font-bold"
+                            title="Increase Indent">⇥+</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Insert Objects -->
+                        <button type="button" onclick="insertAIImage()"
+                            class="p-2 hover:bg-slate-700 bg-purple-900/30 rounded transition font-medium text-pink-300 border border-pink-500/30"
+                            title="Generate an AI placeholder image/sketch based on a prompt">✨ AI Image</button>
+                        <button type="button" onclick="insertTable()" class="p-2 hover:bg-slate-700 rounded transition"
+                            title="Insert Table">⊞ Table</button>
+                        <button type="button" onclick="formatDoc('insertHorizontalRule')"
+                            class="p-2 hover:bg-slate-700 rounded transition font-bold" title="Horizontal Line">―
+                            Line</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Lists -->
+                        <button type="button" onclick="formatDoc('insertUnorderedList')"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Bulleted List">• List</button>
+                        <button type="button" onclick="formatDoc('insertOrderedList')"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Numbered List">1. List</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Page Elements -->
+                        <button type="button" onclick="toggleHeaderFooter()"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Toggle Headers/Footers">☰ H/F</button>
+                        <button type="button" onclick="insertPageNumber()"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Insert Auto Page # in Footer"># Pgs</button>
+                        <button type="button" onclick="insertTextHeader()"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Insert Text Header">Text Header</button>
+                        <button type="button" onclick="insertHeaderTable()"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Insert Tabular Header">Table Header</button>
+                        <button type="button" onclick="insertFooterTemplate()"
+                            class="p-2 hover:bg-slate-700 rounded transition" title="Insert Footer">Footer</button>
+
+                        <div class="h-6 w-px bg-slate-600 mx-1"></div>
+
+                        <!-- Page Layout Box -->
+                        <div class="flex items-center gap-2 bg-slate-900 px-2 py-1 rounded-md border border-slate-600"
+                            title="Configure Page Size">
+                            <label class="flex items-center gap-1 cursor-pointer text-xs text-purple-300">
+                                <input type="checkbox" id="show-page-breaks" class="accent-purple-500 w-3 h-3" checked>
+                                Guides
+                            </label>
+                            <span class="text-xs text-purple-300 ml-1">Page:</span>
+                            <select id="page-size" class="bg-transparent text-white focus:outline-none text-sm w-16">
+                                <option value="A4">A4</option>
+                                <option value="A3">A3</option>
+                                <option value="Letter">Letter</option>
+                                <option value="Legal">Legal</option>
+                            </select>
+                            <span class="text-xs text-purple-300 ml-1">Margin:</span>
+                            <select id="page-margin" class="bg-transparent text-white focus:outline-none text-sm w-16">
+                                <option value="25.4mm">Normal</option>
+                                <option value="12.7mm">Narrow</option>
+                                <option value="38.1mm">Wide</option>
+                                <option value="0mm">None</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4 border-b border-purple-500/20 pb-4 print:hidden">
+                    <h2
+                        class="text-3xl font-outfit font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-300 to-pink-300">
+                        Your Practical</h2>
+                    <div class="flex flex-wrap gap-2">
+                        <button id="google-docs-btn"
+                            class="px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-200 border border-emerald-500/50 hover:bg-emerald-500/30 transition-all flex items-center gap-2 font-medium print:hidden">
+                            <span>Export to Google Docs</span>
+                        </button>
+                        <button id="word-export-btn"
+                            class="px-4 py-2 rounded-lg bg-sky-500/20 text-sky-200 border border-sky-500/50 hover:bg-sky-500/30 transition-all flex items-center gap-2 font-medium print:hidden">
+                            <span>Export to Word</span>
+                        </button>
+                        <button id="download-btn"
+                            class="px-4 py-2 rounded-lg bg-pink-500/20 text-pink-300 border border-pink-500/50 hover:bg-pink-500/30 transition-all flex items-center gap-2 font-medium print:hidden">
+                            <span>Print & Save PDF</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    class="flex justify-center w-full overflow-x-auto bg-slate-950 p-4 sm:p-8 rounded-xl ring-1 ring-purple-500/20 print:p-0 print:bg-transparent print:ring-0 print:overflow-visible print:block">
+                    <div id="document-page"
+                        class="bg-white text-slate-900 shadow-2xl relative transition-all page-guides print-reset"
+                        style="width: 210mm; min-height: 297mm; padding: 20mm;">
+                        <table class="w-full h-full">
+                            <thead class="table-header-group">
+                                <tr>
+                                    <td>
+                                        <div id="doc-header" contenteditable="true"
+                                            class="block w-full min-h-[30px] border-b border-gray-300/50 text-sm text-gray-500 focus:outline-none focus:border-gray-400 empty:after:content-['[Document_Header]'] empty:after:text-gray-300"
+                                            title="This content repeats at the top of every printed page!"></div>
+                                    </td>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="align-top">
+                                        <div id="result-content" class="w-full prose prose-slate max-w-none">
+                                            <p class="text-gray-300 italic">Your magical practical will appear here
+                                                after initializing the canvas...</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                            <tfoot class="table-footer-group">
+                                <tr>
+                                    <td class="align-bottom">
+                                        <div id="doc-footer" contenteditable="true"
+                                            class="block w-full min-h-[30px] border-t border-gray-300/50 mt-4 text-sm text-gray-500 focus:outline-none focus:border-gray-400 empty:after:content-['[Document_Footer]'] empty:after:text-gray-300 flex justify-between"
+                                            title="This content repeats at the bottom of every printed page!"></div>
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="billing-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center px-4 print:hidden">
+        <div class="glass-panel w-full max-w-lg rounded-2xl border border-pink-500/30 p-6 shadow-2xl">
+            <div class="flex justify-between items-start gap-4 mb-4">
+                <div>
+                    <h2 class="text-2xl font-outfit font-bold text-pink-200">Buy Labmate.ai Credits</h2>
+                    <p class="text-slate-300 text-sm mt-1">Payments can support cards, UPI, net banking, and wallets once your payment link is configured.</p>
+                </div>
+                <button type="button" onclick="closeBilling()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div class="grid grid-cols-2 gap-3 text-sm text-slate-200 mb-5">
+                <div class="rounded-lg border border-slate-700 bg-slate-900/60 p-3">Cards</div>
+                <div class="rounded-lg border border-slate-700 bg-slate-900/60 p-3">UPI</div>
+                <div class="rounded-lg border border-slate-700 bg-slate-900/60 p-3">Net banking</div>
+                <div class="rounded-lg border border-slate-700 bg-slate-900/60 p-3">Wallets</div>
+            </div>
+            <div id="billing-message" class="text-sm text-slate-300 bg-slate-900/70 rounded-lg border border-slate-700 p-3 mb-4">
+                Loading billing status...
+            </div>
+            <button type="button" onclick="startCheckout()" class="w-full rounded-xl bg-gradient-to-r from-pink-600 to-purple-600 px-6 py-3 font-bold text-white hover:scale-[1.01] transition-all">
+                Continue to Payment
+            </button>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            },
+            svg: {
+                fontCache: 'none'
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+    <script src="/js/main.js?v=4"></script>
+</body>
+
+</html>

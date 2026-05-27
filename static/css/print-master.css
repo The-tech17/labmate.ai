@@ -1,0 +1,167 @@
+/* print-master.css */
+/* Native Academic Print Overrides */
+
+@page { 
+    size: A4 portrait; 
+    margin: 25.4mm; 
+}
+
+@media print {
+    /* Hide background stars natively */
+    #stars, #stars2, #stars3 {
+        display: none !important;
+    }
+    
+    /* Reset layout containers to absolute zero padding/height */
+    body, html, main, .glass-panel, #result-container, .max-w-4xl {
+        background: transparent !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 0 !important;
+        height: auto !important;
+        counter-reset: page_counter;
+    }
+    
+    /* Wrapper containers */
+    .glass-panel {
+        border: none !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        backdrop-filter: none !important;
+    }
+    
+    /* Document specifically */
+    #document-page {
+        display: block !important;
+        position: static !important; /* CRITICAL: absolute positioning breaks multi-page print! */
+        width: 100% !important;
+        max-width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+        border: none !important;
+    }
+
+    .page-guides {
+        background-image: none !important;
+    }
+    
+    /* Table bounds must not stretch vertically, creating false gaps */
+    table, tbody, tr, td {
+        vertical-align: top !important;
+        height: auto !important;
+    }
+    
+    /* Force Header Stability strictly to the top */
+    thead td {
+        vertical-align: top !important;
+        padding-top: 0 !important;
+    }
+    #doc-header {
+        margin-top: 0 !important;
+    }
+
+    /* Override all Card styling to make them continuously flow */
+    .section-card {
+        display: block !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        margin-bottom: 2rem !important; /* Keep academic spacing between sections */
+        border-radius: 0 !important;
+        /* CRITICAL: Allow long sections to bisect across pages naturally to maximize space utilization! */
+        page-break-inside: auto !important;
+        break-inside: auto !important;
+        page-break-after: auto !important;
+        break-after: auto !important;
+    }
+
+    /* Force headers to be standard black Academic text instead of Gamma Gradients */
+    .section-card h3 {
+        color: #000000 !important;
+        font-family: 'Times New Roman', Times, serif !important;
+        font-size: 14pt !important;
+        font-weight: bold !important;
+        border-bottom: none !important;
+        background: transparent !important;
+        -webkit-text-fill-color: #000000 !important;
+        padding: 0 !important;
+        margin-left: 0 !important;
+        margin-bottom: 1rem !important;
+        /* Ensure the title is absolutely never orphaned at the bottom of a page! */
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+    }
+
+    /* Standard academic text sizing for the payload */
+    .section-body {
+        color: #000000 !important;
+        font-family: 'Times New Roman', Times, serif !important;
+        font-size: 12pt !important;
+        line-height: 1.5 !important;
+    }
+    
+    .section-body p, .section-body li, .section-body td {
+        orphans: 3;
+        widows: 3;
+    }
+    
+    /* Ensure code boxes don't get clipped horizontally, but allow them to bisect across pages natively! */
+    pre, code {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        page-break-inside: auto !important;
+        break-inside: auto !important;
+    }
+    
+    /* Hide the repeating placeholder prompts if the user didn't write anything */
+    #doc-header:empty, #doc-footer:empty {
+        display: none !important;
+    }
+
+    #doc-header,
+    #doc-footer {
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    #doc-header {
+        min-height: 0 !important;
+        padding-bottom: 0 !important;
+        margin-bottom: 10pt !important;
+    }
+
+    #result-content {
+        padding-bottom: 18mm !important;
+    }
+    
+    /* The repeating standard academic header/footer */
+    thead { 
+        display: table-header-group; 
+    }
+    
+    #doc-header {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+    }
+
+    tfoot {
+        display: table-footer-group !important;
+    }
+
+    #doc-footer {
+        padding-top: 4pt !important;
+        color: #000000 !important;
+    }
+    
+    /* Cross-browser Page Count Hack via TFoot repeating clones */
+    .page-number-ui::after {
+        counter-increment: page_counter;
+        content: "Page " counter(page_counter);
+    }
+}

@@ -1,0 +1,253 @@
+/* Magic Aesthetic Styles */
+.font-outfit {
+    font-family: 'Outfit', sans-serif;
+}
+.font-inter {
+    font-family: 'Inter', sans-serif;
+}
+
+.glass-panel {
+    background: rgba(30, 41, 59, 0.4);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.animate-gradient {
+    background-size: 200% auto;
+    animation: shine 3s linear infinite;
+}
+
+@keyframes shine {
+    to {
+        background-position: 200% center;
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.6s ease-out forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Starry Background CSS */
+#stars, #stars2, #stars3 {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 0;
+    pointer-events: none;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(circle at center, #1e1b4b 0%, #0f172a 100%);
+    z-index: -1;
+}
+
+.spark-icon {
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+}
+
+/* Typography styles for generated content */
+#document-page,
+#result-content,
+#doc-header,
+#doc-footer,
+.section-card,
+.section-card .section-title,
+.section-card .section-body {
+    font-family: "Times New Roman", serif;
+    font-size: 12pt;
+    line-height: 1;
+    color: #111827;
+}
+
+.section-card {
+    box-shadow: none;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0 0 0.5rem 0;
+    background: transparent;
+}
+
+.section-card .section-title,
+.section-card h3,
+.section-inline-label,
+.inline-label {
+    display: inline;
+    font-size: 12pt;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0;
+    margin: 0;
+    border: none;
+    font-family: inherit !important;
+    color: inherit;
+}
+
+.section-card .section-title:focus,
+.section-card h3:focus,
+#doc-header:focus,
+#doc-footer:focus {
+    outline: none;
+}
+
+#result-content .section-inline-row,
+#result-content p {
+    margin: 0 0 0.25rem 0;
+    line-height: 1;
+    font-family: inherit;
+    color: inherit;
+}
+
+#result-content h1,
+#result-content h2,
+#result-content h3,
+#result-content h4,
+#result-content h5,
+#result-content h6 {
+    color: inherit;
+    font-family: inherit;
+    font-size: 12pt;
+    font-weight: 700;
+    line-height: 1;
+    margin: 0 0 0.2rem 0;
+    border-bottom: none;
+    padding: 0;
+}
+
+#result-content ul, #result-content ol {
+    margin-top: 0.1rem;
+    margin-bottom: 0.2rem;
+    padding-left: 1.25rem;
+    list-style-position: outside;
+}
+
+#result-content ul {
+    list-style-type: disc;
+}
+
+#result-content ol {
+    list-style-type: decimal;
+}
+
+#result-content li {
+    font-family: inherit;
+    color: inherit;
+    line-height: 1.0;
+    margin-bottom: 0.1rem;
+}
+
+#result-content li::marker {
+    color: inherit;
+}
+
+#result-content table,
+#doc-header table,
+#doc-footer table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 0.3rem 0;
+    color: inherit;
+}
+
+#result-content th,
+#result-content td,
+#doc-header th,
+#doc-header td,
+#doc-footer th,
+#doc-footer td {
+    border: 1px solid #64748b;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    vertical-align: top;
+    font-weight: 400;
+}
+
+#result-content th,
+#doc-header th,
+#doc-footer th {
+    font-weight: 700;
+}
+
+.page-number-ui {
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.page-number-ui::after {
+    content: "Page " counter(page);
+}
+
+#result-content pre {
+    background: transparent;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    border: none;
+    overflow-x: auto;
+    font-family: monospace;
+    color: inherit;
+    opacity: 0.9;
+}
+
+/* Page Break Visuals */
+.page-guides {
+    /* Draws a faint dashed line exact at A4 page boundaries (297mm) */
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent,
+        transparent calc(297mm - 2px),
+        #cbd5e1 calc(297mm - 2px),
+        #cbd5e1 297mm
+    );
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #0f172a; 
+}
+::-webkit-scrollbar-thumb {
+    background: #c084fc; 
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #e879f9; 
+}
+
+/* MathJax Drag & Drop Inline Editing Rules */
+mjx-container {
+    cursor: grab;
+    display: inline-block !important;
+    margin: 0 0.2rem !important;
+    padding: 0.1rem;
+    vertical-align: middle !important;
+    border-radius: 0.25rem;
+    transition: outline 0.1s ease-in-out, background 0.1s;
+}
+
+mjx-container:hover {
+    outline: 2px dashed #a855f7; /* purple-500 */
+    background: rgba(168, 85, 247, 0.1);
+}
+
+mjx-container:active {
+    cursor: grabbing;
+}
