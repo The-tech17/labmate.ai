@@ -1040,15 +1040,15 @@ async function chargeForExperiment() {
     }
 }
 
-async function downloadWordFile() {
+async function fetchWordExportBlob() {
     const doc = document.getElementById('document-page');
-    if (!doc) return;
+    if (!doc) throw new Error('No document is ready to export.');
 
     const title = (currentTopic || 'Labmate.ai_experiment').slice(0, 80);
     const response = await fetch('/api/export/word', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ title, html: doc.innerHTML })
+        body: JSON.stringify({ title, html: buildPrintExportHtml(doc) })
     });
 
     if (!response.ok) {
@@ -1057,14 +1057,64 @@ async function downloadWordFile() {
     }
 
     const blob = await response.blob();
+    const filename = `${title.replace(/[^A-Za-z0-9_-]+/g, '_') || 'Labmate.ai_experiment'}.doc`;
+    return { blob, title, filename };
+}
+
+async function downloadWordFile() {
+    const { blob, filename } = await fetchWordExportBlob();
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${title.replace(/[^A-Za-z0-9_-]+/g, '_') || 'Labmate.ai_experiment'}.doc`;
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+}
+
+function buildPrintExportHtml(doc) {
+    const clone = doc.cloneNode(true);
+
+    clone.removeAttribute('style');
+    clone.className = '';
+
+    Array.from(clone.querySelectorAll('*')).forEach((node) => {
+        const classList = Array.from(node.classList || []);
+        const shouldRemove = classList.some((className) => (
+            className === 'print:hidden' ||
+            className === 'magic-btn' ||
+            className === 'magic-btn-visual' ||
+            className === 'magic-run-btn' ||
+            className === 'badge-text' ||
+            className === 'badge-text-visual'
+        ));
+
+        if (
+            shouldRemove ||
+            node.tagName === 'BUTTON' ||
+            node.tagName === 'FIGCAPTION' ||
+            node.getAttribute('contenteditable') === 'false'
+        ) {
+            node.remove();
+            return;
+        }
+
+        node.removeAttribute('contenteditable');
+        node.removeAttribute('spellcheck');
+        node.removeAttribute('title');
+
+        if (node.classList.contains('section-title')) {
+            node.innerHTML = `<strong>${escapeHTML(node.textContent.trim())}</strong>`;
+        }
+
+        if (node.id === 'doc-header' || node.id === 'doc-footer') {
+            const placeholderOnly = !node.textContent.trim() && !node.querySelector('table, img, svg');
+            if (placeholderOnly) node.remove();
+        }
+    });
+
+    return clone.innerHTML;
 }
 
 window.exportToWord = async function() {
@@ -1077,13 +1127,55 @@ window.exportToWord = async function() {
 
 window.exportToGoogleDocs = async function() {
     try {
-        await downloadWordFile();
-        window.open('https://docs.google.com/document/u/0/', '_blank', 'noopener');
-        alert('Your Word file has been downloaded. In Google Docs, use File > Open > Upload to edit it as a Google Doc. Direct one-click export needs Google Drive API credentials.');
+        const googleDocUrl = await uploadExportToGoogleDocs();
+        window.open(googleDocUrl, '_blank', 'noopener');
     } catch (err) {
-        alert(err.message);
+        alert(`${err.message}\n\nFallback: downloading the formatted Word file now. Upload it to Google Drive and choose Open with > Google Docs.`);
+        await downloadWordFile();
     }
 };
+
+async function uploadExportToGoogleDocs() {
+    if (!authClient) throw new Error('Google Docs export needs Google sign-in to be configured.');
+
+    const { data } = await authClient.auth.getSession();
+    const googleAccessToken = data?.session?.provider_token;
+    if (!googleAccessToken) {
+        throw new Error('Google Drive access is not available for this session. Sign out, sign in with Google again, and make sure the Drive file scope is enabled in the Google login request.');
+    }
+
+    const { blob, filename } = await fetchWordExportBlob();
+    const boundary = `labmate_docs_${Date.now()}`;
+    const metadata = {
+        name: filename.replace(/\.doc$/i, ''),
+        mimeType: 'application/vnd.google-apps.document'
+    };
+
+    const multipartBody = new Blob([
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+        JSON.stringify(metadata),
+        `\r\n--${boundary}\r\nContent-Type: application/msword\r\n\r\n`,
+        blob,
+        `\r\n--${boundary}--`
+    ], { type: `multipart/related; boundary=${boundary}` });
+
+    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${googleAccessToken}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: multipartBody
+    });
+
+    const dataUpload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const message = dataUpload?.error?.message || 'Google Drive upload failed.';
+        throw new Error(message);
+    }
+
+    return dataUpload.webViewLink || `https://docs.google.com/document/d/${dataUpload.id}/edit`;
+}
 
 window.openBilling = async function(message = '') {
     const modal = document.getElementById('billing-modal');
@@ -1156,7 +1248,12 @@ document.getElementById('google-login-btn')?.addEventListener('click', async () 
     const { error } = await authClient.auth.signInWithOAuth({
         provider: 'google',
         options: {
-            redirectTo: window.location.origin
+            redirectTo: window.location.origin,
+            scopes: 'openid email profile https://www.googleapis.com/auth/drive.file',
+            queryParams: {
+                access_type: 'offline',
+                prompt: 'consent'
+            }
         }
     });
 
