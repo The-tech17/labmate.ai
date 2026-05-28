@@ -350,10 +350,6 @@ window.createCanvas = async function() {
             <div id="${cardId}" data-section-name="${escapedName}" class="section-card relative bg-white shadow-2xl rounded-2xl p-8 mb-8 border border-purple-500/20 group transition-all">
                 <!-- Action Bar -->
                 <div class="absolute -top-4 right-6 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 print:hidden z-20">
-                    <button onclick="queueSectionGeneration('${cardId}', this.getAttribute('data-section'), true)" data-section="${escapedName}" class="magic-btn-visual bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-full px-4 py-2 shadow-lg hover:scale-105 transition-transform flex items-center gap-2" title="Generate Diagram/Output">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                        <span class="text-sm font-bold badge-text-visual">Visual</span>
-                    </button>
                     <button onclick="insertImageFileIntoSection('${cardId}')" class="bg-slate-700 text-white rounded-full px-4 py-2 shadow-lg hover:bg-slate-600 hover:scale-105 transition-transform flex items-center gap-2" title="Insert image file">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                         <span class="text-sm font-bold">Image</span>
@@ -616,10 +612,6 @@ window.createCanvas = async function() {
         const cardHTML = `
             <div id="${cardId}" data-section-name="${escapedName}" class="section-card relative bg-white shadow-2xl rounded-2xl p-8 mb-8 border border-purple-500/20 group transition-all">
                 <div class="absolute -top-4 right-6 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 print:hidden z-20">
-                    <button onclick="queueSectionGeneration('${cardId}', this.getAttribute('data-section'), true)" data-section="${escapedName}" class="magic-btn-visual bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-full px-4 py-2 shadow-lg hover:scale-105 transition-transform flex items-center gap-2" title="Generate Diagram/Output">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                        <span class="text-sm font-bold badge-text-visual">Visual</span>
-                    </button>
                     <button onclick="insertImageFileIntoSection('${cardId}')" class="bg-slate-700 text-white rounded-full px-4 py-2 shadow-lg hover:bg-slate-600 hover:scale-105 transition-transform flex items-center gap-2" title="Insert image file">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                         <span class="text-sm font-bold">Image</span>
@@ -1048,7 +1040,11 @@ async function fetchWordExportBlob() {
     const response = await fetch('/api/export/word', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ title, html: buildPrintExportHtml(doc) })
+        body: JSON.stringify({
+            title,
+            html: buildPrintExportHtml(doc),
+            document: buildDocxExportData(doc)
+        })
     });
 
     if (!response.ok) {
@@ -1057,8 +1053,40 @@ async function fetchWordExportBlob() {
     }
 
     const blob = await response.blob();
-    const filename = `${title.replace(/[^A-Za-z0-9_-]+/g, '_') || 'Labmate.ai_experiment'}.doc`;
+    const filename = `${title.replace(/[^A-Za-z0-9_-]+/g, '_') || 'Labmate.ai_experiment'}.docx`;
     return { blob, title, filename };
+}
+
+function buildDocxExportData(doc) {
+    const header = doc.querySelector('#doc-header');
+    const footer = doc.querySelector('#doc-footer');
+    const sections = Array.from(doc.querySelectorAll('#result-content .section-card')).map((card) => {
+        const titleEl = card.querySelector('.section-title');
+        const bodyEl = card.querySelector('.section-body');
+        return {
+            title: titleEl ? titleEl.textContent.trim() : (card.dataset.sectionName || '').trim(),
+            body_html: bodyEl ? cleanExportFragment(bodyEl) : ''
+        };
+    }).filter(section => section.title || section.body_html);
+
+    return {
+        header_html: header ? cleanExportFragment(header) : '',
+        footer_html: footer ? cleanExportFragment(footer) : '',
+        sections
+    };
+}
+
+function cleanExportFragment(element) {
+    const clone = element.cloneNode(true);
+    Array.from(clone.querySelectorAll('button, figcaption, .print\\:hidden, .magic-btn, .magic-btn-visual, .magic-run-btn, [contenteditable="false"]')).forEach(node => node.remove());
+    Array.from(clone.querySelectorAll('*')).forEach(node => {
+        node.removeAttribute('class');
+        node.removeAttribute('style');
+        node.removeAttribute('contenteditable');
+        node.removeAttribute('spellcheck');
+        node.removeAttribute('title');
+    });
+    return clone.innerHTML;
 }
 
 async function downloadWordFile() {
@@ -1147,14 +1175,14 @@ async function uploadExportToGoogleDocs() {
     const { blob, filename } = await fetchWordExportBlob();
     const boundary = `labmate_docs_${Date.now()}`;
     const metadata = {
-        name: filename.replace(/\.doc$/i, ''),
+        name: filename.replace(/\.docx?$/i, ''),
         mimeType: 'application/vnd.google-apps.document'
     };
 
     const multipartBody = new Blob([
         `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
         JSON.stringify(metadata),
-        `\r\n--${boundary}\r\nContent-Type: application/msword\r\n\r\n`,
+        `\r\n--${boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n`,
         blob,
         `\r\n--${boundary}--`
     ], { type: `multipart/related; boundary=${boundary}` });
