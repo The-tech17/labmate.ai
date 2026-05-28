@@ -382,8 +382,8 @@ def add_page_field(paragraph):
     run._r.append(fld_end)
 
 def style_run(run, bold=False, code=False):
-    run.font.name = "Consolas" if code else "Times New Roman"
-    run.font.size = Pt(10 if code else 12)
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(12)
     run.bold = bold
 
 def add_inline_runs(paragraph, node, bold=False, code=False):
@@ -759,8 +759,8 @@ def export_word():
         pre, code {{
             white-space: pre-wrap;
             word-wrap: break-word;
-            font-family: Consolas, "Courier New", monospace;
-            font-size: 10pt;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 12pt;
             line-height: 1;
             background: transparent;
             border: 0;
