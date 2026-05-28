@@ -16,6 +16,13 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
+from docx import Document
+from docx.enum.section import WD_SECTION
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
 
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path)
@@ -287,6 +294,224 @@ def get_current_credits(user_id):
     credits, _created = ensure_credit_account(user_id)
     return credits
 
+class SimpleHTMLNode:
+    def __init__(self, tag="root", attrs=None):
+        self.tag = tag
+        self.attrs = dict(attrs or [])
+        self.children = []
+
+class SimpleHTMLTreeParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = SimpleHTMLNode()
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = SimpleHTMLNode(tag.lower(), attrs)
+        self.stack[-1].children.append(node)
+        if tag.lower() not in {"br", "img", "hr", "meta", "link", "input"}:
+            self.stack.append(node)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        while len(self.stack) > 1:
+            node = self.stack.pop()
+            if node.tag == tag:
+                break
+
+    def handle_data(self, data):
+        if data:
+            self.stack[-1].children.append(data)
+
+def parse_html_fragment(fragment):
+    parser = SimpleHTMLTreeParser()
+    parser.feed(fragment or "")
+    return parser.root
+
+def node_text(node):
+    if isinstance(node, str):
+        return node
+    if node.tag == "br":
+        return "\n"
+    return "".join(node_text(child) for child in node.children)
+
+def set_document_defaults(document):
+    section = document.sections[0]
+    section.top_margin = Inches(1)
+    section.bottom_margin = Inches(1)
+    section.left_margin = Inches(1)
+    section.right_margin = Inches(1)
+    section.footer_distance = Inches(0.35)
+    section.header_distance = Inches(0.35)
+
+    style = document.styles["Normal"]
+    style.font.name = "Times New Roman"
+    style.font.size = Pt(12)
+    style.paragraph_format.space_before = Pt(0)
+    style.paragraph_format.space_after = Pt(3)
+    style.paragraph_format.line_spacing = 1
+
+def set_cell_border(cell):
+    tc_pr = cell._tc.get_or_add_tcPr()
+    borders = tc_pr.first_child_found_in("w:tcBorders")
+    if borders is None:
+        borders = OxmlElement("w:tcBorders")
+        tc_pr.append(borders)
+    for edge in ("top", "left", "bottom", "right"):
+        tag = "w:" + edge
+        element = borders.find(qn(tag))
+        if element is None:
+            element = OxmlElement(tag)
+            borders.append(element)
+        element.set(qn("w:val"), "single")
+        element.set(qn("w:sz"), "6")
+        element.set(qn("w:space"), "0")
+        element.set(qn("w:color"), "64748B")
+
+def add_page_field(paragraph):
+    run = paragraph.add_run()
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(qn("w:fldCharType"), "end")
+    run._r.append(fld_begin)
+    run._r.append(instr)
+    run._r.append(fld_end)
+
+def style_run(run, bold=False, code=False):
+    run.font.name = "Consolas" if code else "Times New Roman"
+    run.font.size = Pt(10 if code else 12)
+    run.bold = bold
+
+def add_inline_runs(paragraph, node, bold=False, code=False):
+    if isinstance(node, str):
+        text = re.sub(r"\s+", " ", node)
+        if text:
+            run = paragraph.add_run(text)
+            style_run(run, bold=bold, code=code)
+        return
+    if node.tag == "br":
+        paragraph.add_run().add_break()
+        return
+    child_bold = bold or node.tag in {"strong", "b"}
+    child_code = code or node.tag in {"code", "pre"}
+    for child in node.children:
+        add_inline_runs(paragraph, child, child_bold, child_code)
+
+def add_text_paragraph(container, text="", bold=False, code=False):
+    if not text.strip():
+        return None
+    paragraph = container.add_paragraph()
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(3)
+    paragraph.paragraph_format.line_spacing = 1
+    run = paragraph.add_run(text.strip())
+    style_run(run, bold=bold, code=code)
+    return paragraph
+
+def render_table(container, table_node):
+    rows = [child for child in table_node.children if not isinstance(child, str) and child.tag in {"tr", "thead", "tbody"}]
+    flat_rows = []
+    for row in rows:
+        if row.tag == "tr":
+            flat_rows.append(row)
+        else:
+            flat_rows.extend(child for child in row.children if not isinstance(child, str) and child.tag == "tr")
+    if not flat_rows:
+        return
+    max_cols = max(
+        len([cell for cell in row.children if not isinstance(cell, str) and cell.tag in {"td", "th"}])
+        for row in flat_rows
+    )
+    if max_cols < 1:
+        return
+    try:
+        table = container.add_table(rows=len(flat_rows), cols=max_cols)
+    except TypeError:
+        table = container.add_table(rows=len(flat_rows), cols=max_cols, width=Inches(6.5))
+    table.autofit = True
+    for row_index, row in enumerate(flat_rows):
+        cells = [cell for cell in row.children if not isinstance(cell, str) and cell.tag in {"td", "th"}]
+        for col_index, cell_node in enumerate(cells):
+            cell = table.cell(row_index, col_index)
+            cell.text = ""
+            set_cell_border(cell)
+            paragraph = cell.paragraphs[0]
+            paragraph.paragraph_format.space_after = Pt(0)
+            add_inline_runs(paragraph, cell_node, bold=(cell_node.tag == "th"))
+
+def render_html_fragment(container, fragment):
+    root = parse_html_fragment(fragment)
+    for child in root.children:
+        render_node(container, child)
+
+def render_node(container, node):
+    if isinstance(node, str):
+        add_text_paragraph(container, node)
+        return
+    if node.tag in {"script", "style", "button", "svg"}:
+        return
+    if node.tag == "table":
+        render_table(container, node)
+        return
+    if node.tag == "pre":
+        add_text_paragraph(container, node_text(node), code=True)
+        return
+    if node.tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        text = node_text(node).strip()
+        has_block_child = any(
+            not isinstance(child, str) and child.tag in {"table", "p", "div", "pre", "ul", "ol"}
+            for child in node.children
+        )
+        if text and not has_block_child:
+            paragraph = container.add_paragraph()
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(3)
+            paragraph.paragraph_format.line_spacing = 1
+            add_inline_runs(paragraph, node, bold=node.tag.startswith("h"))
+        else:
+            for child in node.children:
+                render_node(container, child)
+        return
+    if node.tag in {"ul", "ol"}:
+        for child in node.children:
+            if not isinstance(child, str) and child.tag == "li":
+                add_text_paragraph(container, node_text(child), bold=False)
+        return
+    text = node_text(node).strip()
+    if text:
+        add_text_paragraph(container, text)
+
+def build_docx_export(title, document_data):
+    document = Document()
+    set_document_defaults(document)
+
+    section = document.sections[0]
+    if document_data.get("header_html"):
+        render_html_fragment(section.header, document_data.get("header_html"))
+
+    footer_text = node_text(parse_html_fragment(document_data.get("footer_html", ""))).strip()
+    footer = section.footer
+    paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    paragraph.clear()
+    paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(6.25), WD_TAB_ALIGNMENT.RIGHT)
+    if footer_text:
+        run = paragraph.add_run(footer_text)
+        style_run(run)
+    paragraph.add_run("\t")
+    add_page_field(paragraph)
+
+    for item in document_data.get("sections", []):
+        title_text = (item.get("title") or "").strip()
+        if title_text:
+            add_text_paragraph(document, title_text, bold=True)
+        render_html_fragment(document, item.get("body_html", ""))
+
+    return document
+
 @app.route('/')
 def index():
     # Inject secure config to the frontend JS engine
@@ -408,9 +633,23 @@ def export_word():
     try:
         data = request.json or {}
         title = re.sub(r"[^A-Za-z0-9_-]+", "_", data.get("title", "Labmate.ai_experiment")).strip("_") or "Labmate.ai_experiment"
+        document_data = data.get("document") or {}
         document_html = data.get("html", "")
-        if not document_html.strip():
+        has_structured_content = bool(document_data.get("sections") or document_data.get("header_html") or document_data.get("footer_html"))
+        if not has_structured_content and not document_html.strip():
             return jsonify({"error": "No document content was provided."}), 400
+
+        if has_structured_content:
+            docx_document = build_docx_export(title, document_data)
+            buffer = io.BytesIO()
+            docx_document.save(buffer)
+            buffer.seek(0)
+            return send_file(
+                buffer,
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                as_attachment=True,
+                download_name=f"{title}.docx"
+            )
 
         word_html = f"""<!DOCTYPE html>
 <html>
