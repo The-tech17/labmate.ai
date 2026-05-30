@@ -13,6 +13,10 @@ import subprocess
 import uuid
 import shutil
 import re
+import base64
+import hashlib
+import hmac
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,7 +63,14 @@ EXPERIMENT_CREDIT_COST = 20
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
+
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "").strip()
+RAZORPAY_CREDIT_PACK_AMOUNT_INR = int(os.environ.get("RAZORPAY_CREDIT_PACK_AMOUNT_INR", "99") or 99)
+RAZORPAY_CREDIT_PACK_CREDITS = int(os.environ.get("RAZORPAY_CREDIT_PACK_CREDITS", "400") or 400)
 
 PAYMENT_LINK_URL = (
     os.environ.get("RAZORPAY_PAYMENT_LINK_URL", "").strip()
@@ -249,6 +260,132 @@ def supabase_rest_request(method, path, token, body=None):
         except json.JSONDecodeError:
             details = {"message": raw or exc.reason, "code": exc.code}
         raise RuntimeError(details) from exc
+
+def supabase_service_request(method, path, body=None):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("Supabase service role key is required for billing automation.")
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{path}"
+    payload = None
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Accept": "application/json",
+    }
+
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        headers["Prefer"] = "return=representation"
+
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else []
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            details = json.loads(raw)
+        except json.JSONDecodeError:
+            details = {"message": raw or exc.reason, "code": exc.code}
+        raise RuntimeError(details) from exc
+
+def razorpay_orders_enabled():
+    return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET and SUPABASE_SERVICE_ROLE_KEY)
+
+def razorpay_api_request(method, path, body=None):
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise RuntimeError("Razorpay Orders are not configured.")
+
+    credentials = f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode("utf-8")
+    headers = {
+        "Authorization": "Basic " + base64.b64encode(credentials).decode("ascii"),
+        "Accept": "application/json",
+    }
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(f"https://api.razorpay.com/v1/{path}", data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            details = json.loads(raw)
+        except json.JSONDecodeError:
+            details = {"message": raw or exc.reason, "code": exc.code}
+        raise RuntimeError(details) from exc
+
+def verify_hmac_sha256(message, signature, secret):
+    expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature or "")
+
+def get_billing_order(razorpay_order_id):
+    order_filter = urllib.parse.quote(str(razorpay_order_id), safe="")
+    rows = supabase_service_request(
+        "GET",
+        f"billing_orders?select=*&razorpay_order_id=eq.{order_filter}&limit=1"
+    )
+    return rows[0] if rows else None
+
+def add_credits_with_service(user_id, credits_to_add):
+    user_filter = urllib.parse.quote(str(user_id), safe="")
+    rows = supabase_service_request(
+        "GET",
+        f"user_credits?select=credits&user_id=eq.{user_filter}&limit=1"
+    )
+    if rows:
+        current = int(rows[0].get("credits", 0) or 0)
+        supabase_service_request(
+            "PATCH",
+            f"user_credits?user_id=eq.{user_filter}",
+            {"credits": current + int(credits_to_add)}
+        )
+    else:
+        supabase_service_request(
+            "POST",
+            "user_credits",
+            {"user_id": user_id, "credits": FREE_CREDIT_ALLOWANCE + int(credits_to_add)}
+        )
+
+def fulfill_billing_order(razorpay_order_id, razorpay_payment_id=None, webhook_event_id=None):
+    order = get_billing_order(razorpay_order_id)
+    if not order:
+        raise RuntimeError(f"Unknown Razorpay order: {razorpay_order_id}")
+    if order.get("status") != "created":
+        return False, order
+
+    order_filter = urllib.parse.quote(str(razorpay_order_id), safe="")
+    claimed = supabase_service_request(
+        "PATCH",
+        f"billing_orders?razorpay_order_id=eq.{order_filter}&status=eq.created",
+        {
+            "status": "processing",
+            "razorpay_payment_id": razorpay_payment_id,
+            "webhook_event_id": webhook_event_id
+        }
+    )
+    if not claimed:
+        latest = get_billing_order(razorpay_order_id)
+        return False, latest or order
+
+    add_credits_with_service(order["user_id"], int(order.get("credits", 0) or 0))
+    updated = supabase_service_request(
+        "PATCH",
+        f"billing_orders?razorpay_order_id=eq.{order_filter}",
+        {
+            "status": "paid",
+            "razorpay_payment_id": razorpay_payment_id,
+            "webhook_event_id": webhook_event_id,
+            "paid_at": datetime.now(timezone.utc).isoformat()
+        }
+    )
+    return True, updated[0] if updated else order
 
 def credit_setup_error(error):
     text = str(error).lower()
@@ -606,16 +743,136 @@ def consume_experiment_credits():
 @app.route('/api/billing/options', methods=['GET'])
 @require_auth
 def billing_options():
+    orders_ready = razorpay_orders_enabled()
     return jsonify({
         "methods": ["Cards", "UPI", "Net banking", "Wallets"],
-        "configured": bool(PAYMENT_LINK_URL),
+        "configured": orders_ready or bool(PAYMENT_LINK_URL),
+        "mode": "orders" if orders_ready else "payment_link",
+        "key_id": RAZORPAY_KEY_ID if orders_ready else None,
+        "amount_inr": RAZORPAY_CREDIT_PACK_AMOUNT_INR,
+        "credits": RAZORPAY_CREDIT_PACK_CREDITS,
         "checkout_url": PAYMENT_LINK_URL if PAYMENT_LINK_URL else None,
         "message": (
-            "Billing is ready to open your configured payment link."
-            if PAYMENT_LINK_URL
-            else "Add RAZORPAY_PAYMENT_LINK_URL, STRIPE_PAYMENT_LINK_URL, or LIBRA_PAYMENT_LINK_URL to enable live payments."
+            f"Buy {RAZORPAY_CREDIT_PACK_CREDITS} credits for INR {RAZORPAY_CREDIT_PACK_AMOUNT_INR}."
+            if orders_ready
+            else (
+                "Billing is ready to open your configured payment link."
+                if PAYMENT_LINK_URL
+                else "Add Razorpay Orders keys or RAZORPAY_PAYMENT_LINK_URL to enable live payments."
+            )
         )
     })
+
+@app.route('/api/billing/create_order', methods=['POST'])
+@require_auth
+def billing_create_order():
+    try:
+        if not razorpay_orders_enabled():
+            return jsonify({
+                "error": "RAZORPAY_ORDERS_NOT_CONFIGURED",
+                "message": "Add RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, and SUPABASE_SERVICE_ROLE_KEY to enable Razorpay Orders."
+            }), 501
+
+        user_id = get_auth_user_id()
+        amount_paise = RAZORPAY_CREDIT_PACK_AMOUNT_INR * 100
+        receipt = f"lm_{uuid.uuid4().hex[:24]}"
+        order = razorpay_api_request("POST", "orders", {
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": receipt,
+            "notes": {
+                "user_id": str(user_id),
+                "credits": str(RAZORPAY_CREDIT_PACK_CREDITS),
+                "product": "labmate_credits"
+            }
+        })
+
+        supabase_service_request("POST", "billing_orders", {
+            "user_id": user_id,
+            "razorpay_order_id": order["id"],
+            "amount_paise": amount_paise,
+            "currency": "INR",
+            "credits": RAZORPAY_CREDIT_PACK_CREDITS,
+            "status": "created",
+            "receipt": receipt
+        })
+
+        return jsonify({
+            "key_id": RAZORPAY_KEY_ID,
+            "order_id": order["id"],
+            "amount": amount_paise,
+            "currency": "INR",
+            "credits": RAZORPAY_CREDIT_PACK_CREDITS,
+            "name": "Labmate.ai",
+            "description": f"{RAZORPAY_CREDIT_PACK_CREDITS} Labmate.ai credits"
+        })
+    except Exception as e:
+        return jsonify({"error": "ORDER_CREATE_FAILED", "message": str(e)}), 500
+
+@app.route('/api/billing/verify', methods=['POST'])
+@require_auth
+def billing_verify_payment():
+    try:
+        if not RAZORPAY_KEY_SECRET:
+            return jsonify({"error": "RAZORPAY_NOT_CONFIGURED", "message": "Razorpay key secret is missing."}), 501
+
+        data = request.json or {}
+        razorpay_order_id = data.get("razorpay_order_id", "")
+        razorpay_payment_id = data.get("razorpay_payment_id", "")
+        razorpay_signature = data.get("razorpay_signature", "")
+        if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
+            return jsonify({"error": "INVALID_PAYMENT_RESPONSE", "message": "Missing Razorpay payment details."}), 400
+
+        order = get_billing_order(razorpay_order_id)
+        if not order or order.get("user_id") != get_auth_user_id():
+            return jsonify({"error": "UNKNOWN_ORDER", "message": "This payment order was not found for your account."}), 404
+
+        message = f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8")
+        if not verify_hmac_sha256(message, razorpay_signature, RAZORPAY_KEY_SECRET):
+            return jsonify({"error": "SIGNATURE_VERIFICATION_FAILED", "message": "Payment signature verification failed."}), 400
+
+        credited, updated_order = fulfill_billing_order(razorpay_order_id, razorpay_payment_id=razorpay_payment_id)
+        credits, _created = ensure_credit_account(get_auth_user_id())
+        return jsonify({
+            "status": "paid",
+            "credited": credited,
+            "credits_added": int(updated_order.get("credits", 0) or 0),
+            "credits": credits
+        })
+    except Exception as e:
+        return jsonify({"error": "PAYMENT_VERIFY_FAILED", "message": str(e)}), 500
+
+@app.route('/api/razorpay/webhook', methods=['POST'])
+def razorpay_webhook():
+    try:
+        if not RAZORPAY_WEBHOOK_SECRET:
+            return jsonify({"error": "Webhook secret is not configured."}), 501
+
+        raw_body = request.get_data() or b""
+        signature = request.headers.get("X-Razorpay-Signature", "")
+        if not verify_hmac_sha256(raw_body, signature, RAZORPAY_WEBHOOK_SECRET):
+            return jsonify({"error": "Invalid webhook signature."}), 400
+
+        payload = json.loads(raw_body.decode("utf-8"))
+        event = payload.get("event", "")
+        if event not in {"order.paid", "payment.captured"}:
+            return jsonify({"status": "ignored", "event": event})
+
+        payment_entity = (payload.get("payload", {}).get("payment", {}) or {}).get("entity", {}) or {}
+        order_entity = (payload.get("payload", {}).get("order", {}) or {}).get("entity", {}) or {}
+        razorpay_order_id = payment_entity.get("order_id") or order_entity.get("id")
+        razorpay_payment_id = payment_entity.get("id")
+        if not razorpay_order_id:
+            return jsonify({"error": "Webhook payload did not include an order id."}), 400
+
+        credited, _order = fulfill_billing_order(
+            razorpay_order_id,
+            razorpay_payment_id=razorpay_payment_id,
+            webhook_event_id=request.headers.get("X-Razorpay-Event-Id")
+        )
+        return jsonify({"status": "ok", "credited": credited})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/billing/checkout', methods=['POST'])
 @require_auth
