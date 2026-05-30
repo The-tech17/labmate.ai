@@ -978,18 +978,11 @@ function showCreditStatus(credits) {
         display.classList.toggle('text-emerald-300', currentCredits >= EXPERIMENT_CREDIT_COST);
     }
 
-    const authDisplay = document.getElementById('auth-credit-display');
-    if (authDisplay) {
-        authDisplay.textContent = message;
-        authDisplay.classList.toggle('text-amber-300', currentCredits < EXPERIMENT_CREDIT_COST);
-        authDisplay.classList.toggle('text-emerald-300', currentCredits >= EXPERIMENT_CREDIT_COST);
-    }
 }
 
 function showCreditUnavailable(message = 'Credits unavailable') {
     const displays = [
-        document.getElementById('credit-display'),
-        document.getElementById('auth-credit-display')
+        document.getElementById('credit-display')
     ].filter(Boolean);
 
     displays.forEach(display => {
@@ -1226,17 +1219,74 @@ window.closeBilling = function() {
 };
 
 window.startCheckout = async function() {
+    const msg = document.getElementById('billing-message');
     try {
-        const response = await fetch('/api/billing/checkout', {
+        if (!window.Razorpay) {
+            throw new Error('Razorpay Checkout could not load. Please refresh and try again.');
+        }
+
+        if (msg) msg.textContent = 'Creating secure Razorpay order...';
+        const response = await fetch('/api/billing/create_order', {
             method: 'POST',
             headers: getAuthHeaders(),
             body: JSON.stringify({ package: 'credits' })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || data.error || 'Billing is not configured.');
-        window.open(data.checkout_url, '_blank', 'noopener');
+        if (!response.ok) {
+            if (data.error === 'RAZORPAY_ORDERS_NOT_CONFIGURED') {
+                const fallback = await fetch('/api/billing/checkout', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ package: 'credits' })
+                });
+                const fallbackData = await fallback.json();
+                if (!fallback.ok) throw new Error(fallbackData.message || fallbackData.error || data.message || 'Billing is not configured.');
+                window.open(fallbackData.checkout_url, '_blank', 'noopener');
+                return;
+            }
+            throw new Error(data.message || data.error || 'Could not create Razorpay order.');
+        }
+
+        const checkout = new Razorpay({
+            key: data.key_id,
+            amount: data.amount,
+            currency: data.currency,
+            name: data.name || 'Labmate.ai',
+            description: data.description || `${data.credits || ''} Labmate.ai credits`,
+            order_id: data.order_id,
+            prefill: {
+                email: session?.user?.email || ''
+            },
+            theme: {
+                color: '#9333ea'
+            },
+            handler: async (paymentResponse) => {
+                try {
+                    if (msg) msg.textContent = 'Verifying payment securely...';
+                    const verifyResponse = await fetch('/api/billing/verify', {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify(paymentResponse)
+                    });
+                    const verifyData = await verifyResponse.json();
+                    if (!verifyResponse.ok) {
+                        throw new Error(verifyData.message || verifyData.error || 'Payment verification failed.');
+                    }
+                    showCreditStatus(verifyData.credits);
+                    if (msg) msg.textContent = `Payment successful. ${verifyData.credits_added} credits added.`;
+                } catch (err) {
+                    if (msg) msg.textContent = err.message;
+                }
+            },
+            modal: {
+                ondismiss: () => {
+                    if (msg) msg.textContent = 'Payment cancelled before completion.';
+                }
+            }
+        });
+
+        checkout.open();
     } catch (err) {
-        const msg = document.getElementById('billing-message');
         if (msg) msg.textContent = err.message;
     }
 };
